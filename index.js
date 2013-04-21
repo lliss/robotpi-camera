@@ -5,6 +5,12 @@ var serialPort = new SerialPort('/dev/ttyAMA0', {
 var fs = require('fs');
 var http = require('http');
 
+
+// Whether we are currently blocking serial communiction because
+// a photo capture is in progress.
+var takingPhoto = false;
+
+
 // Command Variables
 var x = 00;
 var y = 00;
@@ -32,16 +38,32 @@ var returnedImage = new Array();
 http.createServer(function(req, res) {
   var action = req.url;
   if (action == '/image.jpg') {
-    var img = fs.readFileSync('./image.jpg');
-    res.writeHead(200, {'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache, must-revalidate'});
-    res.end(img, 'binary');
-    reload();
-    snapIt();
+    fs.readFile('./image.jpg', function(error, img) {
+      if (error) {
+        res.writeHead(501, {'Content-Type': 'text/html'});
+        res.end('<html><body>An internal error occurred.</body></html>');
+      }
+      else {
+        res.writeHead(200, {'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache, must-revalidate'});
+        res.end(img, 'binary');
+      }
+      if (!takingPhoto) {
+        reload();
+        snapIt();
+      }
+    });
   }
   if (action == '/') {
-    var indexPage = fs.readFileSync('./index.html');
-    res.writeHead(200, {'Content-Type': 'text/html'});
-    res.end(indexPage);
+    var indexPage = fs.readFile('./index.html', function(error, indexPage) {
+      if (error) {
+        res.writeHead(501, {'Content-Type': 'text/html'});
+        res.end('<html><body>An internal error occurred.</body></html>');
+      }
+      else {
+        res.writeHead(200, {'Content-Type': 'text/html'});
+        res.end(indexPage);
+      }
+    });
   }
 }).listen(8881);
 
@@ -61,50 +83,52 @@ serialPort.on('data', function(data) {
       returnedReset[3] == 0   &&
       returnedReset.length == 71
     ) {
-      triggerShutter();
+      triggerShutter(function() {
+        console.log('Shutter is done triggering.');
+      if (sizeState) {
+        returnedSize = returnedSize.concat(newData);
+        if (returnedSize.length == 9) {
+          var mem1 = returnedSize[7];
+          var mem2 = returnedSize[8];
+          getImageData(mem1, mem2);
+        }
+      }
+      if (readState) {
+        returnedImage = returnedImage.concat(newData);
+        if (
+          returnedImage[returnedImage.length - 7] == 255 &&
+          returnedImage[returnedImage.length - 6] == 217 &&
+          returnedImage[returnedImage.length - 5] == 118 &&
+          returnedImage[returnedImage.length - 4] == 0   &&
+          returnedImage[returnedImage.length - 3] == 50  &&
+          returnedImage[returnedImage.length - 2] == 0   &&
+          returnedImage[returnedImage.length - 1] == 0
+        ) {
+          console.log('Writing image');
+          var begin = returnedImage.indexOf(255);
+          console.log(begin);
+          var end = returnedImage.lastIndexOf(255);
+          console.log(end);
+          returnedImage = returnedImage.slice(begin, end);
+          var image = new Buffer(returnedImage);
+          fs.appendFile('image.jpg', image, function (err) {
+            if (err) throw err;
+          });
+          takingPhoto = false;
+        }
+      }
+      if (data.toString() == takeReturn.toString() && takeState) {
+        getSize();
+      }
     }
-  }
-  if (sizeState) {
-    returnedSize = returnedSize.concat(newData);
-    if (returnedSize.length == 9) {
-      var mem1 = returnedSize[7];
-      var mem2 = returnedSize[8];
-      getImageData(mem1, mem2);
-    }
-  }
-  if (readState) {
-    returnedImage = returnedImage.concat(newData);
-    if (
-      returnedImage[returnedImage.length - 7] == 255 &&
-      returnedImage[returnedImage.length - 6] == 217 &&
-      returnedImage[returnedImage.length - 5] == 118 &&
-      returnedImage[returnedImage.length - 4] == 0   &&
-      returnedImage[returnedImage.length - 3] == 50  &&
-      returnedImage[returnedImage.length - 2] == 0   &&
-      returnedImage[returnedImage.length - 1] == 0
-    ) {
-      console.log('Writing image');
-      var begin = returnedImage.indexOf(255);
-      console.log(begin);
-      var end = returnedImage.lastIndexOf(255);
-      console.log(end);
-      returnedImage = returnedImage.slice(begin, end);
-      var image = new Buffer(returnedImage);
-      fs.appendFile('image.jpg', image, function (err) {
-        if (err) throw err;
-      });
-    }
-  }
-  if (data.toString() == takeReturn.toString() && takeState) {
-    getSize();
-  }
 });
 
 function snapIt() {
+  takingPhoto = true;
   console.log('reset');
   serialPort.write(resetCommand, function(err, results) {
     if (err) {
-      console.log('err ' + err);
+      console.error('err ', err);
     }
     else {
       console.log(results + ' bytes sent');
@@ -116,24 +140,30 @@ function snapIt() {
   readState  = false;
 }
 
-function triggerShutter() {
+function triggerShutter(next) {
   var buf = new Buffer(0);
   fs.writeFile('image.jpg', buf, function (err) {
-    if (err) throw err;
-  });
-  console.log('take picture');
-  serialPort.write(takePic, function(err, results) {
     if (err) {
-      console.log('err ' + err);
+      next(err);
     }
-    else {
-      console.log(results + ' bytes sent');
-    }
+    console.log('take picture');
+    serialPort.write(takePic, function(err, results) {
+      if (err) {
+        console.log('err ' + err);
+        if (err) {
+          next(err);
+        }
+      }
+      else {
+        console.log(results + ' bytes sent');
+      }
+      resetState = false;
+      takeState  = true;
+      sizeState  = false;
+      readState  = false;
+      next();
+    });
   });
-  resetState = false;
-  takeState  = true;
-  sizeState  = false;
-  readState  = false;
 }
 
 function getSize() {
