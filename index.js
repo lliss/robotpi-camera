@@ -20,6 +20,7 @@ var sizeState  = false;
 var readState  = false;
 var serialReady  = false;
 var takingPic = false;
+var lastPic = 0;
 
 // Return data expectations.
 var takeReturn = new Buffer([118, 00, 54, 00, 00]);
@@ -38,6 +39,11 @@ http.createServer(function(req, res) {
     var img = fs.readFileSync('./image.jpg');
     res.writeHead(200, {'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache, must-revalidate'});
     res.end(img, 'binary');
+    var time = new Date().getTime();
+    if (time - lastPic > 7000) {
+      reload();
+      takingPic = false;
+    }
     if (!takingPic) {
       reload();
       snapIt();
