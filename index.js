@@ -19,6 +19,7 @@ var takeState  = false;
 var sizeState  = false;
 var readState  = false;
 var serialReady  = false;
+var takingPic = false;
 
 // Return data expectations.
 var takeReturn = new Buffer([118, 00, 54, 00, 00]);
@@ -31,12 +32,16 @@ var returnedImage = new Array();
 
 http.createServer(function(req, res) {
   var action = req.url;
-  if (action == '/image.jpg') {
+  console.log(action);
+  if (action.substr(0, 10) == '/image.jpg') {
+    console.log(action);
     var img = fs.readFileSync('./image.jpg');
     res.writeHead(200, {'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache, must-revalidate'});
     res.end(img, 'binary');
-    reload();
-    snapIt();
+    if (!takingPic) {
+      reload();
+      snapIt();
+    }
   }
   if (action == '/') {
     var indexPage = fs.readFileSync('./index.html');
@@ -90,9 +95,14 @@ serialPort.on('data', function(data) {
       console.log(end);
       returnedImage = returnedImage.slice(begin, end);
       var image = new Buffer(returnedImage);
+      var buf = new Buffer(0);
+      fs.writeFile('image.jpg', buf, function (err) {
+        if (err) throw err;
+      });
       fs.appendFile('image.jpg', image, function (err) {
         if (err) throw err;
       });
+      takingPic = false;
     }
   }
   if (data.toString() == takeReturn.toString() && takeState) {
@@ -101,6 +111,7 @@ serialPort.on('data', function(data) {
 });
 
 function snapIt() {
+  takingPic = true;
   console.log('reset');
   serialPort.write(resetCommand, function(err, results) {
     if (err) {
@@ -117,10 +128,6 @@ function snapIt() {
 }
 
 function triggerShutter() {
-  var buf = new Buffer(0);
-  fs.writeFile('image.jpg', buf, function (err) {
-    if (err) throw err;
-  });
   console.log('take picture');
   serialPort.write(takePic, function(err, results) {
     if (err) {
